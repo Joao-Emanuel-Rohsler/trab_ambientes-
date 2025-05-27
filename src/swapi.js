@@ -3,12 +3,16 @@ const https = require("https");
 
 const URL_BASE_API = "https://swapi.dev/api/";
 const QUANTIDADE_NAVES = 3;
-const POPULACAO_LIMITE = 1_000_000_000;
-const DIAMETRO_LIMITE = 10_000;
+const POPULACAO_LIMITE = 1000000000;
+const DIAMETRO_LIMITE = 10000;
 const LIMITE_VEICULOS = 4;
 const CODIGO_SUCESSO = 200;
 const CODIGO_NAO_ENCONTRADO = 404;
 const PORTA_PADRAO = 3000;
+const INDEX_NAO_ENCONTRADO = -1;
+const ARGUMENTO_EXTRA = 1;
+const elementosIgnorados= 2;
+const HTTP_ERRO = 400;
 
 let modoDepuracao = true;
 let tempoLimite = 5000;
@@ -18,6 +22,46 @@ let tamanhoDados = 0;
 let ultimoId = 1;
 const cache = {};
 
+function criarRequisicao(endpoint, resolve, reject) {
+    let dados = "";
+
+    const req = https.get(`${URL_BASE_API}${endpoint}`, { rejectUnauthorized: false }, (res) => {
+        if (res.statusCode >= HTTP_ERRO) {
+            contadorErros++;
+            return reject(new Error(`Request failed with status code ${res.statusCode}`));
+        }
+
+        res.on("data", (chunk) => dados += chunk);
+        res.on("end", () => {
+            try {
+                const json = JSON.parse(dados);
+                cache[endpoint] = json;
+                if (modoDepuracao) logCache(endpoint);
+                resolve(json);
+            } catch (erro) {
+                contadorErros++;
+                reject(erro);
+            }
+        });
+    });
+
+    req.on("error", (e) => {
+        contadorErros++;
+        reject(e);
+    });
+
+    req.setTimeout(tempoLimite, () => {
+        req.abort();
+        contadorErros++;
+        reject(new Error(`Request timeout for ${endpoint}`));
+    });
+}
+
+function logCache(endpoint) {
+    console.log(`Successfully fetched data for ${endpoint}`);
+    console.log(`Cache size: ${Object.keys(cache).length}`);
+}
+
 async function buscarDados(endpoint) {
     if (cache[endpoint]) {
         if (modoDepuracao) console.log("Using cached data for", endpoint);
@@ -25,58 +69,43 @@ async function buscarDados(endpoint) {
     }
 
     return new Promise((resolve, reject) => {
-        let dados = "";
-
-        const req = https.get(`${URL_BASE_API}${endpoint}`, { rejectUnauthorized: false }, (res) => {
-            if (res.statusCode >= 400) {
-                contadorErros++;
-                return reject(new Error(`Request failed with status code ${res.statusCode}`));
-            }
-
-            res.on("data", (chunk) => dados += chunk);
-            res.on("end", () => {
-                try {
-                    const json = JSON.parse(dados);
-                    cache[endpoint] = json;
-                    if (modoDepuracao) {
-                        console.log(`Successfully fetched data for ${endpoint}`);
-                        console.log(`Cache size: ${Object.keys(cache).length}`);
-                    }
-                    resolve(json);
-                } catch (erro) {
-                    contadorErros++;
-                    reject(erro);
-                }
-            });
-        });
-
-        req.on("error", (e) => {
-            contadorErros++;
-            reject(e);
-        });
-
-        req.setTimeout(tempoLimite, () => {
-            req.abort();
-            contadorErros++;
-            reject(new Error(`Request timeout for ${endpoint}`));
-        });
+        criarRequisicao(endpoint, resolve, reject);
     });
 }
 
-function mostrarDetalhes(item, tipo, indice = null) {
-    if (indice !== null) console.log(`\n${tipo} ${indice + 1}:`);
-    else console.log(`\nFeatured ${tipo}:`);
+function exibirCampo(label, valor) {
+    if (valor) console.log(`${label}: ${valor}`);
+}
 
-    console.log("Name:", item.name);
-    console.log("Model:", item.model);
-    console.log("Manufacturer:", item.manufacturer);
-    console.log("Cost:", item.cost_in_credits !== "unknown" ? item.cost_in_credits + " credits" : "unknown");
-    if (item.length) console.log("Length:", item.length);
-    if (item.crew) console.log("Crew Required:", item.crew);
-    if (item.passengers) console.log("Passengers:", item.passengers);
-    if (item.max_atmosphering_speed) console.log("Speed:", item.max_atmosphering_speed);
-    if (item.hyperdrive_rating) console.log("Hyperdrive Rating:", item.hyperdrive_rating);
-    if (item.pilots?.length) console.log("Pilots:", item.pilots.length);
+function mostrarDetalhes(item, tipo, indice = null) {
+    const titulo = indice !== null ? `${tipo} ${indice + 1}` : `Featured ${tipo}`;
+    console.log(`\n${titulo}:`);
+
+    exibirCampo("Name", item.name);
+    exibirCampo("Model", item.model);
+    exibirCampo("Manufacturer", item.manufacturer);
+    exibirCampo("Cost", item.cost_in_credits !== "unknown" ? `${item.cost_in_credits} credits` : "unknown");
+    exibirCampo("Length", item.length);
+    exibirCampo("Crew Required", item.crew);
+    exibirCampo("Passengers", item.passengers);
+    exibirCampo("Speed", item.max_atmosphering_speed);
+    exibirCampo("Hyperdrive Rating", item.hyperdrive_rating);
+    exibirCampo("Pilots", item.pilots?.length);
+}
+
+function exibirPlaneta(planeta) {
+    if (
+        planeta.population !== "unknown" &&
+        planeta.diameter !== "unknown" &&
+        parseInt(planeta.population) > POPULACAO_LIMITE &&
+        parseInt(planeta.diameter) > DIAMETRO_LIMITE
+    ) {
+        console.log(`${planeta.name} - Pop: ${planeta.population}`);
+        console.log(`   Diameter: ${planeta.diameter} - Climate: ${planeta.climate}`);
+        if (planeta.films?.length) {
+            console.log(`   Appeaprs in ${planeta.films.length} films`);
+        }
+    }
 }
 
 async function executar() {
@@ -86,43 +115,33 @@ async function executar() {
 
         const personagem = await buscarDados(`people/${ultimoId}`);
         tamanhoDados += JSON.stringify(personagem).length;
+
         console.log("Character:", personagem.name);
         console.log("Height:", personagem.height);
         console.log("Mass:", personagem.mass);
         console.log("Birthday:", personagem.birth_year);
         if (personagem.films?.length) {
-            console.log("Appears in", personagem.films.length, "films");
+            console.log(`Appears in ${personagem.films.length} films`);
         }
 
         const naves = await buscarDados("starships/?page=1");
         tamanhoDados += JSON.stringify(naves).length;
         console.log("\nTotal Starships:", naves.count);
-
         naves.results.slice(0, QUANTIDADE_NAVES).forEach((nave, i) => {
             mostrarDetalhes(nave, "Starship", i);
         });
 
         const planetas = await buscarDados("planets/?page=1");
         tamanhoDados += JSON.stringify(planetas).length;
-
         console.log("\nLarge populated planets:");
-        planetas.results.forEach((planeta) => {
-            if (
-                planeta.population !== "unknown" &&
-                planeta.diameter !== "unknown" &&
-                parseInt(planeta.population) > POPULACAO_LIMITE &&
-                parseInt(planeta.diameter) > DIAMETRO_LIMITE
-            ) {
-                console.log(`${planeta.name} - Pop: ${planeta.population} - Diameter: ${planeta.diameter} - Climate: ${planeta.climate}`);
-                if (planeta.films?.length) {
-                    console.log(`  Appears in ${planeta.films.length} films`);
-                }
-            }
-        });
+        planetas.results.forEach(exibirPlaneta);
 
         const filmes = await buscarDados("films/");
         tamanhoDados += JSON.stringify(filmes).length;
-        const filmesOrdenados = filmes.results.sort((a, b) => new Date(a.release_date) - new Date(b.release_date));
+
+        const filmesOrdenados = filmes.results.sort(
+            (a, b) => new Date(a.release_date) - new Date(b.release_date)
+        );
 
         console.log("\nStar Wars Films in chronological order:");
         filmesOrdenados.forEach((filme, i) => {
@@ -155,11 +174,11 @@ async function executar() {
 }
 
 function configurar() {
-    const args = process.argv.slice(2);
+    const args = process.argv.slice(elementosIgnorados);
     if (args.includes("--no-debug")) modoDepuracao = false;
 
     const indexTimeout = args.indexOf("--timeout");
-    if (indexTimeout > -1 && indexTimeout < args.length - 1) {
+    if (indexTimeout > INDEX_NAO_ENCONTRADO && indexTimeout < args.length - ARGUMENTO_EXTRA) {
         tempoLimite = parseInt(args[indexTimeout + 1]);
     }
 }
@@ -235,14 +254,16 @@ function gerarHTML() {
                 }
             </script>
             <div class="footer">
-                <p>API calls: ${contadorRequisicoes} | Cache entries: ${Object.keys(cache).length} | Errors: ${contadorErros}</p>
-                <pre>Debug mode: ${modoDepuracao ? "ON" : "OFF"} | Timeout: ${tempoLimite}ms</pre>
+                <p>API calls: ${contadorRequisicoes} 
+                | Cache entries: ${Object.keys(cache).length} 
+                | Errors: ${contadorErros}</p>
+                <pre>Debug mode: ${modoDepuracao ? "ON" : "OFF"} 
+                | Timeout: ${tempoLimite}ms</pre>
             </div>
         </body>
         </html>
     `;
 }
 
-// ▶️ Execução principal
 configurar();
 iniciarServidor();

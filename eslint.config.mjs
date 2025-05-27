@@ -4,7 +4,6 @@ import pluginJs from "@eslint/js";
 export default [
     { files: ["**/*.js"], languageOptions: { sourceType: "commonjs" } },
 
-    // 👇 Adiciona suporte aos globais do Node.js, como `process`
     { languageOptions: { globals: { ...globals.browser, ...globals.node } } },
 
     pluginJs.configs.recommended,
